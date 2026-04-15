@@ -103,7 +103,10 @@
         const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
         const path = `${uid()}.${ext}`;
         const { error } = await sb.storage.from('criativos').upload(path, file, { cacheControl: '3600' });
-        if (error) throw error;
+        if (error) {
+          console.error('Erro no upload:', error);
+          throw new Error(`Erro ao enviar imagem: ${error.message}`);
+        }
         return sb.storage.from('criativos').getPublicUrl(path).data.publicUrl;
       }));
       return urls;
@@ -458,17 +461,22 @@
     // ─── CreatePostForm ───────────────────────────────────────────────────────────
 
     function CreatePostForm({ onSave, onCancel }) {
-      const [f, setF]         = useState({ title: '', caption: '', observation: '' });
+      const [f, setF]           = useState({ title: '', caption: '', observation: '' });
       const [images, setImages] = useState([]);
       const [saving, setSaving] = useState(false);
+      const [erro,   setErro]   = useState(null);
       const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
       const handleSubmit = async (e) => {
         e.preventDefault();
         if (!f.title.trim() || !f.caption.trim()) return;
         setSaving(true);
+        setErro(null);
         try {
           await onSave({ ...f, images });
+        } catch (err) {
+          console.error(err);
+          setErro(err.message || 'Erro desconhecido. Veja o console para detalhes.');
         } finally {
           setSaving(false);
         }
@@ -504,6 +512,19 @@
                   placeholder="Informações adicionais, contexto, instruções…"
                   rows={3} style={{ ...S.input, resize: 'vertical' }} />
               </Field>
+
+              {erro && (
+                <div style={{
+                  fontSize: '0.8125rem',
+                  color: 'var(--color-accent-danger)',
+                  background: 'var(--color-status-revision-bg)',
+                  border: '1px solid #fca5a5',
+                  borderRadius: 'var(--border-radius-md)',
+                  padding: '0.625rem 0.875rem',
+                }}>
+                  <strong>Erro:</strong> {erro}
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', alignItems: 'center' }}>
                 {saving && (
