@@ -98,14 +98,36 @@
       return mapRow(data);
     }
 
+    function withTimeout(promise, ms, msg) {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(msg)), ms)),
+      ]);
+    }
+
     async function uploadImages(files) {
+      // Verifica se o bucket existe antes de tentar subir
+      const { error: bucketErr } = await withTimeout(
+        sb.storage.from('criativos').list('', { limit: 1 }),
+        8000,
+        'Bucket "criativos" não encontrado ou inacessível. Crie o bucket no Supabase Storage e configure as políticas de acesso.'
+      );
+      if (bucketErr) {
+        console.error('Erro bucket:', bucketErr);
+        throw new Error(`Bucket inacessível: ${bucketErr.message}. Verifique se o bucket "criativos" existe e as políticas estão configuradas.`);
+      }
+
       const urls = await Promise.all(files.map(async (file) => {
         const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
         const path = `${uid()}.${ext}`;
-        const { error } = await sb.storage.from('criativos').upload(path, file, { cacheControl: '3600' });
+        const { error } = await withTimeout(
+          sb.storage.from('criativos').upload(path, file, { cacheControl: '3600' }),
+          30000,
+          `Timeout ao enviar "${file.name}". Verifique sua conexão.`
+        );
         if (error) {
           console.error('Erro no upload:', error);
-          throw new Error(`Erro ao enviar imagem: ${error.message}`);
+          throw new Error(`Erro ao enviar "${file.name}": ${error.message}`);
         }
         return sb.storage.from('criativos').getPublicUrl(path).data.publicUrl;
       }));
