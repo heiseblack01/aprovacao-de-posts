@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aprovação de Posts</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --color-text-primary: #111827;
+      --color-text-secondary: #4b5563;
+      --color-text-tertiary: #9ca3af;
+      --color-text-inverse: #ffffff;
+      --color-background-primary: #ffffff;
+      --color-background-secondary: #f9fafb;
+      --color-background-tertiary: #f3f4f6;
+      --color-border-primary: #d1d5db;
+      --color-border-secondary: #e5e7eb;
+      --color-border-tertiary: #f3f4f6;
+      --color-accent-primary: #2563eb;
+      --color-accent-success: #16a34a;
+      --color-accent-danger: #dc2626;
+      --color-status-pending-bg: #fef9c3;
+      --color-status-pending-text: #854d0e;
+      --color-status-approved-bg: #dcfce7;
+      --color-status-approved-text: #166534;
+      --color-status-revision-bg: #fee2e2;
+      --color-status-revision-text: #991b1b;
+      --border-radius-sm: 4px;
+      --border-radius-md: 8px;
+      --border-radius-lg: 12px;
+      --border-radius-xl: 16px;
+      --border-radius-full: 9999px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: var(--color-background-secondary);
+      color: var(--color-text-primary);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // ─── Supabase ─────────────────────────────────────────────────────────────────
+
+    const sb = supabase.createClient(
+      'https://rtlodjiyjrkkqnaykieb.supabase.co',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ0bG9kaml5anJra3FuYXlraWViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyMDgxOTIsImV4cCI6MjA5MTc4NDE5Mn0.hPXGO3PjVM5JJdUyxzgKmqa0GewezmCQB_yYvftRpO0'
+    );
+
+    function mapRow(r) {
+      return {
+        id:            r.id,
+        title:         r.title,
+        creativeUrl:   r.creative_url   || '',
+        caption:       r.caption,
+        observation:   r.observation    || '',
+        status:        r.status,
+        clientComment: r.client_comment || null,
+        createdAt:     r.created_at,
+      };
+    }
+
+    async function loadPosts() {
+      const { data, error } = await sb
+        .from('posts')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) { console.error(error); return []; }
+      return (data || []).map(mapRow);
+    }
+
+    async function loadPost(id) {
+      const { data, error } = await sb
+        .from('posts')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (error || !data) return null;
+      return mapRow(data);
+    }
+
+    async function createPost(post) {
+      const { error } = await sb.from('posts').insert({
+        id:           post.id,
+        title:        post.title,
+        creative_url: post.creativeUrl  || null,
+        caption:      post.caption,
+        observation:  post.observation  || null,
+        status:       'aguardando',
+      });
+      if (error) throw error;
+    }
+
+    async function deletePost(id) {
+      const { error } = await sb.from('posts').delete().eq('id', id);
+      if (error) throw error;
+    }
+
+    async function updatePostStatus(id, status, clientComment) {
+      const { error } = await sb.from('posts').update({
+        status,
+        client_comment: clientComment || null,
+      }).eq('id', id);
+      if (error) throw error;
+    }
+
+    // ─── Utils ───────────────────────────────────────────────────────────────────
+
+    function uid() {
+      return Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+    }
+
+    function fmtDate(iso) {
+      return new Date(iso).toLocaleDateString('pt-BR', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      });
+    }
+
+    function reviewUrl(id) {
+      return `${window.location.href.split('#')[0]}#review/${id}`;
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard) return navigator.clipboard.writeText(text).catch(() => fallback(text));
+      fallback(text);
+      function fallback(t) {
+        const el = document.createElement('textarea');
+        el.value = t; document.body.appendChild(el); el.select();
+        document.execCommand('copy'); document.body.removeChild(el);
+      }
+    }
+
+    // ─── Shared styles ───────────────────────────────────────────────────────────
+
+    const S = {
+      input: {
+        width: '100%', padding: '10px 12px',
+        fontSize: '0.875rem',
+        border: '1px solid var(--color-border-primary)',
+        borderRadius: 'var(--border-radius-md)',
+        background: 'var(--color-background-primary)',
+        color: 'var(--color-text-primary)',
+        fontFamily: 'inherit', outline: 'none',
+      },
+      btn: (bg, color, border) => ({
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        padding: '10px 18px', fontSize: '0.875rem', fontWeight: 600,
+        background: bg, color, border: border ? `1px solid ${border}` : 'none',
+        borderRadius: 'var(--border-radius-md)', cursor: 'pointer',
+        fontFamily: 'inherit', whiteSpace: 'nowrap',
+      }),
+      smallBtn: (color, border) => ({
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        padding: '5px 12px', fontSize: '0.75rem', fontWeight: 500,
+        background: 'transparent', color, border: `1px solid ${border || 'var(--color-border-primary)'}`,
+        borderRadius: 'var(--border-radius-md)', cursor: 'pointer',
+        fontFamily: 'inherit', whiteSpace: 'nowrap',
+      }),
+    };
+
+    const btnPrimary   = S.btn('var(--color-accent-primary)', 'var(--color-text-inverse)');
+    const btnSuccess   = S.btn('var(--color-accent-success)', 'var(--color-text-inverse)');
+    const btnSecondary = S.btn('transparent', 'var(--color-text-primary)', 'var(--color-border-primary)');
+    const smallBtn     = S.smallBtn('var(--color-text-secondary)');
+    const smallBtnBack = S.smallBtn('var(--color-text-primary)', 'var(--color-border-primary)');
+
+    // ─── StatusBadge ─────────────────────────────────────────────────────────────
+
+    const STATUS = {
+      aguardando: { label: 'Aguardando', bg: 'var(--color-status-pending-bg)',  color: 'var(--color-status-pending-text)'  },
+      aprovado:   { label: 'Aprovado',   bg: 'var(--color-status-approved-bg)', color: 'var(--color-status-approved-text)' },
+      em_revisao: { label: 'Em revisão', bg: 'var(--color-status-revision-bg)', color: 'var(--color-status-revision-text)' },
+    };
+
+    function StatusBadge({ status }) {
+      const { label, bg, color } = STATUS[status] || STATUS.aguardando;
+      return (
+        <span style={{
+          display: 'inline-flex', alignItems: 'center',
+          padding: '2px 10px', borderRadius: 'var(--border-radius-full)',
+          fontSize: '0.75rem', fontWeight: 600,
+          backgroundColor: bg, color,
+        }}>
+          {label}
+        </span>
+      );
+    }
+
+    // ─── SummaryCards ────────────────────────────────────────────────────────────
+
+    function SummaryCards({ posts }) {
+      const counts = posts.reduce((a, p) => ({ ...a, [p.status]: (a[p.status] || 0) + 1 }), {});
+      const cards = [
+        { label: 'Total',      n: posts.length,            color: 'var(--color-text-primary)'        },
+        { label: 'Aguardando', n: counts.aguardando || 0,  color: 'var(--color-status-pending-text)' },
+        { label: 'Aprovados',  n: counts.aprovado   || 0,  color: 'var(--color-accent-success)'      },
+        { label: 'Em revisão', n: counts.em_revisao || 0,  color: 'var(--color-accent-danger)'       },
+      ];
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+          {cards.map(c => (
+            <div key={c.label} style={{
+              background: 'var(--color-background-primary)',
+              border: '1px solid var(--color-border-secondary)',
+              borderRadius: 'var(--border-radius-lg)', padding: '1.25rem',
+            }}>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)', marginBottom: '0.25rem' }}>{c.label}</div>
+              <div style={{ fontSize: '1.875rem', fontWeight: 700, color: c.color, lineHeight: 1 }}>{c.n}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ─── CreatePostForm ───────────────────────────────────────────────────────────
+
+    function CreatePostForm({ onSave, onCancel }) {
+      const [f, setF]       = useState({ title: '', creativeUrl: '', caption: '', observation: '' });
+      const [saving, setSaving] = useState(false);
+      const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!f.title.trim() || !f.caption.trim()) return;
+        setSaving(true);
+        await onSave(f);
+        setSaving(false);
+      };
+
+      return (
+        <div style={{
+          background: 'var(--color-background-primary)',
+          border: '1px solid var(--color-border-secondary)',
+          borderRadius: 'var(--border-radius-lg)', padding: '1.5rem', marginBottom: '1.5rem',
+        }}>
+          <h2 style={{ fontSize: '1.0625rem', fontWeight: 600, marginBottom: '1.25rem' }}>Novo post</h2>
+          <form onSubmit={handleSubmit}>
+            <div style={{ display: 'grid', gap: '1rem' }}>
+
+              <Field label="Título interno *">
+                <input type="text" value={f.title} onChange={set('title')}
+                  placeholder="Ex: Post Instagram — Lançamento produto" style={S.input} required />
+              </Field>
+
+              <Field label="URL do criativo (opcional)">
+                <input type="url" value={f.creativeUrl} onChange={set('creativeUrl')}
+                  placeholder="https://..." style={S.input} />
+              </Field>
+
+              <Field label="Legenda *">
+                <textarea value={f.caption} onChange={set('caption')}
+                  placeholder="Texto que será publicado com o post…"
+                  rows={4} style={{ ...S.input, resize: 'vertical' }} required />
+              </Field>
+
+              <Field label="Observação para o cliente (opcional)">
+                <textarea value={f.observation} onChange={set('observation')}
+                  placeholder="Informações adicionais, contexto, instruções…"
+                  rows={3} style={{ ...S.input, resize: 'vertical' }} />
+              </Field>
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={onCancel} style={btnSecondary} disabled={saving}>Cancelar</button>
+                <button type="submit" style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }} disabled={saving}>
+                  {saving ? 'Salvando…' : 'Criar post'}
+                </button>
+              </div>
+
+            </div>
+          </form>
+        </div>
+      );
+    }
+
+    function Field({ label, children }) {
+      return (
+        <div>
+          <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 500, marginBottom: '0.375rem', color: 'var(--color-text-secondary)' }}>
+            {label}
+          </label>
+          {children}
+        </div>
+      );
+    }
+
+    // ─── PostCard (Admin) ─────────────────────────────────────────────────────────
+
+    function PostCard({ post, onDelete, onViewAsClient }) {
+      const [copied, setCopied] = useState(false);
+
+      const handleCopy = () => {
+        copyText(reviewUrl(post.id));
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      };
+
+      return (
+        <div style={{
+          background: 'var(--color-background-primary)',
+          border: '1px solid var(--color-border-secondary)',
+          borderRadius: 'var(--border-radius-lg)', padding: '1.25rem',
+          display: 'flex', flexDirection: 'column', gap: '0.75rem',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '0.2rem' }}>
+                {post.title}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>{fmtDate(post.createdAt)}</div>
+            </div>
+            <StatusBadge status={post.status} />
+          </div>
+
+          {post.caption && (
+            <div style={{
+              fontSize: '0.875rem', color: 'var(--color-text-secondary)',
+              overflow: 'hidden', display: '-webkit-box',
+              WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', textOverflow: 'ellipsis',
+            }}>
+              {post.caption}
+            </div>
+          )}
+
+          {post.clientComment && (
+            <div style={{
+              fontSize: '0.8125rem',
+              color: 'var(--color-status-revision-text)',
+              background: 'var(--color-status-revision-bg)',
+              borderRadius: 'var(--border-radius-md)', padding: '0.625rem 0.875rem',
+            }}>
+              <strong>Comentário do cliente:</strong> {post.clientComment}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button onClick={handleCopy} style={smallBtn}>{copied ? 'Copiado!' : 'Copiar link'}</button>
+            <button onClick={() => onViewAsClient(post)} style={smallBtn}>Ver como cliente</button>
+            <button onClick={() => onDelete(post.id)}
+              style={S.smallBtn('var(--color-accent-danger)', 'var(--color-accent-danger)')}>
+              Excluir
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── AdminPanel ───────────────────────────────────────────────────────────────
+
+    function AdminPanel({ posts, onRefresh }) {
+      const [showForm, setShowForm] = useState(false);
+      const [simPost,  setSimPost]  = useState(null);
+
+      const handleSave = async (form) => {
+        await createPost({ id: uid(), ...form });
+        await onRefresh();
+        setShowForm(false);
+      };
+
+      const handleDelete = async (id) => {
+        if (!confirm('Excluir este post?')) return;
+        await deletePost(id);
+        await onRefresh();
+      };
+
+      if (simPost) {
+        return (
+          <ClientView
+            post={simPost} isSimulation
+            onBack={() => setSimPost(null)}
+            onActionDone={() => {}}
+          />
+        );
+      }
+
+      return (
+        <div style={{ maxWidth: 820, margin: '0 auto', padding: '1.5rem' }}>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+            <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Aprovação de Posts</h1>
+            <button onClick={() => setShowForm(v => !v)} style={showForm ? btnSecondary : btnPrimary}>
+              {showForm ? 'Cancelar' : '+ Novo post'}
+            </button>
+          </div>
+
+          <SummaryCards posts={posts} />
+
+          {showForm && <CreatePostForm onSave={handleSave} onCancel={() => setShowForm(false)} />}
+
+          {posts.length === 0 ? (
+            <div style={{
+              textAlign: 'center', padding: '3.5rem 2rem',
+              background: 'var(--color-background-primary)',
+              border: '1px solid var(--color-border-secondary)',
+              borderRadius: 'var(--border-radius-lg)',
+              color: 'var(--color-text-tertiary)',
+            }}>
+              <div style={{ fontSize: '1.125rem', marginBottom: '0.4rem' }}>Nenhum post criado</div>
+              <div style={{ fontSize: '0.875rem' }}>Clique em "+ Novo post" para começar</div>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              {posts.map(post => (
+                <PostCard key={post.id} post={post} onDelete={handleDelete} onViewAsClient={setSimPost} />
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── ClientView ───────────────────────────────────────────────────────────────
+
+    function ClientView({ post, isSimulation, onBack, onActionDone }) {
+      const [phase,   setPhase]   = useState('review'); // 'review' | 'comment' | 'done'
+      const [comment, setComment] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [action,  setAction]  = useState(null);
+
+      const handleApprove = async () => {
+        if (isSimulation) { setAction('approved'); setPhase('done'); return; }
+        setLoading(true);
+        try {
+          await updatePostStatus(post.id, 'aprovado', null);
+          setAction('approved');
+          setPhase('done');
+          onActionDone('approved');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleSubmitRevision = async () => {
+        if (!comment.trim()) return;
+        if (isSimulation) { setAction('revision'); setPhase('done'); return; }
+        setLoading(true);
+        try {
+          await updatePostStatus(post.id, 'em_revisao', comment);
+          setAction('revision');
+          setPhase('done');
+          onActionDone('revision');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--color-background-secondary)' }}>
+
+          {isSimulation && (
+            <div style={{
+              background: 'var(--color-background-tertiary)',
+              borderBottom: '1px solid var(--color-border-primary)',
+              padding: '0.75rem 1.5rem',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem',
+            }}>
+              <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
+                Simulação — esta é exatamente a visão que o cliente verá
+              </span>
+              <button onClick={onBack} style={smallBtnBack}>Voltar ao painel</button>
+            </div>
+          )}
+
+          <div style={{ flex: 1, maxWidth: 640, margin: '0 auto', width: '100%', padding: '1.5rem' }}>
+
+            {phase === 'done' ? (
+              <div style={{
+                background: 'var(--color-background-primary)',
+                border: '1px solid var(--color-border-secondary)',
+                borderRadius: 'var(--border-radius-xl)',
+                padding: '3rem 2rem', textAlign: 'center', marginTop: '2rem',
+              }}>
+                <div style={{ fontSize: 48, marginBottom: '1rem' }}>
+                  {action === 'approved' ? '✅' : '🔁'}
+                </div>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.75rem' }}>
+                  {action === 'approved' ? 'Post aprovado!' : 'Revisão solicitada!'}
+                </h2>
+                <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
+                  {action === 'approved'
+                    ? 'Obrigado! Sua aprovação foi registrada com sucesso.'
+                    : 'Seu comentário foi registrado. Entraremos em contato em breve.'}
+                </p>
+                {isSimulation && (
+                  <button onClick={onBack} style={{ ...btnPrimary, marginTop: '1.5rem' }}>
+                    Voltar ao painel
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div style={{
+                background: 'var(--color-background-primary)',
+                border: '1px solid var(--color-border-secondary)',
+                borderRadius: 'var(--border-radius-xl)',
+                overflow: 'hidden', marginTop: '1.5rem',
+              }}>
+                {post.creativeUrl && (
+                  <div style={{ borderBottom: '1px solid var(--color-border-tertiary)' }}>
+                    <img
+                      src={post.creativeUrl} alt="Criativo"
+                      style={{ width: '100%', maxHeight: 480, objectFit: 'contain', display: 'block', background: 'var(--color-background-tertiary)' }}
+                      onError={e => { e.target.style.display = 'none'; }}
+                    />
+                  </div>
+                )}
+
+                <div style={{ padding: '1.75rem' }}>
+                  <h1 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1.25rem' }}>{post.title}</h1>
+
+                  <SectionLabel>Legenda</SectionLabel>
+                  <p style={{ fontSize: '0.9375rem', whiteSpace: 'pre-wrap', lineHeight: 1.65, marginBottom: '1.25rem' }}>
+                    {post.caption}
+                  </p>
+
+                  {post.observation && (
+                    <div style={{
+                      background: 'var(--color-background-tertiary)',
+                      borderRadius: 'var(--border-radius-md)',
+                      padding: '0.875rem 1rem', marginBottom: '1.25rem',
+                    }}>
+                      <SectionLabel>Observação da equipe</SectionLabel>
+                      <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', whiteSpace: 'pre-wrap' }}>
+                        {post.observation}
+                      </p>
+                    </div>
+                  )}
+
+                  {phase === 'review' && (
+                    <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+                      <button onClick={handleApprove} disabled={loading}
+                        style={{ ...btnSuccess, flex: 1, opacity: loading ? 0.6 : 1 }}>
+                        {loading ? 'Aguarde…' : 'Aprovar'}
+                      </button>
+                      <button onClick={() => setPhase('comment')} disabled={loading}
+                        style={{ ...btnSecondary, flex: 1 }}>
+                        Solicitar ajuste
+                      </button>
+                    </div>
+                  )}
+
+                  {phase === 'comment' && (
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.5rem', color: 'var(--color-text-secondary)' }}>
+                        Descreva o ajuste necessário
+                      </label>
+                      <textarea
+                        value={comment}
+                        onChange={e => setComment(e.target.value)}
+                        placeholder="Ex: Alterar a cor do botão, revisar o texto do segundo parágrafo…"
+                        rows={4} autoFocus
+                        style={{ ...S.input, resize: 'vertical', marginBottom: '0.75rem' }}
+                      />
+                      <div style={{ display: 'flex', gap: '0.75rem' }}>
+                        <button onClick={() => setPhase('review')} style={{ ...btnSecondary, flex: 1 }}>Voltar</button>
+                        <button
+                          onClick={handleSubmitRevision}
+                          disabled={!comment.trim() || loading}
+                          style={{ ...btnPrimary, flex: 1, opacity: (!comment.trim() || loading) ? 0.5 : 1, cursor: (!comment.trim() || loading) ? 'not-allowed' : 'pointer' }}>
+                          {loading ? 'Enviando…' : 'Enviar solicitação'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function SectionLabel({ children }) {
+      return (
+        <div style={{
+          fontSize: '0.6875rem', fontWeight: 700,
+          textTransform: 'uppercase', letterSpacing: '0.07em',
+          color: 'var(--color-text-tertiary)', marginBottom: '0.4rem',
+        }}>
+          {children}
+        </div>
+      );
+    }
+
+    // ─── ClientViewLoader ─────────────────────────────────────────────────────────
+
+    function ClientViewLoader({ postId }) {
+      const [state, setState] = useState('loading');
+      const [post,  setPost]  = useState(null);
+
+      useEffect(() => {
+        (async () => {
+          const found = await loadPost(postId);
+          if (!found)                             setState('notfound');
+          else if (found.status !== 'aguardando') { setPost(found); setState('already'); }
+          else                                    { setPost(found); setState('review');  }
+        })();
+      }, [postId]);
+
+      if (state === 'loading') return <Centered><span style={{ color: 'var(--color-text-tertiary)' }}>Carregando…</span></Centered>;
+
+      if (state === 'notfound') return (
+        <Centered>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 48, marginBottom: '1rem' }}>🔍</div>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Post não encontrado</h2>
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', marginTop: '0.4rem' }}>
+              Este link pode ser inválido ou ter expirado.
+            </p>
+          </div>
+        </Centered>
+      );
+
+      if (state === 'already') return (
+        <Centered>
+          <div style={{ textAlign: 'center', maxWidth: 440 }}>
+            <div style={{ fontSize: 48, marginBottom: '1rem' }}>
+              {post.status === 'aprovado' ? '✅' : '🔁'}
+            </div>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '0.75rem' }}>
+              Este post já foi revisado
+            </h2>
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
+              Este post foi {post.status === 'aprovado' ? 'aprovado' : 'enviado para revisão'} e não pode ser alterado.
+            </p>
+            {post.clientComment && (
+              <div style={{
+                background: 'var(--color-background-tertiary)',
+                borderRadius: 'var(--border-radius-md)',
+                padding: '0.875rem 1rem', marginTop: '1.25rem', textAlign: 'left',
+              }}>
+                <SectionLabel>Seu comentário</SectionLabel>
+                <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>{post.clientComment}</p>
+              </div>
+            )}
+          </div>
+        </Centered>
+      );
+
+      return <ClientView post={post} isSimulation={false} onBack={() => {}} onActionDone={() => {}} />;
+    }
+
+    function Centered({ children }) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '2rem' }}>
+          {children}
+        </div>
+      );
+    }
+
+    // ─── App ──────────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [posts, setPosts] = useState([]);
+      const [route, setRoute] = useState(window.location.hash);
+      const [ready, setReady] = useState(false);
+
+      const refresh = async () => {
+        const data = await loadPosts();
+        setPosts(data);
+      };
+
+      useEffect(() => {
+        refresh().then(() => setReady(true));
+      }, []);
+
+      useEffect(() => {
+        const h = () => setRoute(window.location.hash);
+        window.addEventListener('hashchange', h);
+        return () => window.removeEventListener('hashchange', h);
+      }, []);
+
+      if (!ready) return <Centered><span style={{ color: 'var(--color-text-tertiary)' }}>Carregando…</span></Centered>;
+
+      const match = route.match(/^#review\/(.+)$/);
+      if (match) return <ClientViewLoader postId={match[1]} />;
+
+      return <AdminPanel posts={posts} onRefresh={refresh} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
